@@ -107,12 +107,12 @@ describe Her::Model::ORM do
 
     it "handles metadata on a destroyed resource" do
       @user = User.destroy_existing(1)
-      @user.metadata[:foo].should == "bar"
+      expect(@user.metadata[:foo]).to eq("bar")
     end
 
     it "handles error data on a destroyed resource" do
       @user = User.destroy_existing(1)
-      @user.response_errors.should == ["Yes", "Sir"]
+      expect(@user.response_errors).to eq(%w(Yes Sir))
     end
   end
 
@@ -212,6 +212,8 @@ describe Her::Model::ORM do
           stub.get("/users?age=42&foo=bar") { [200, {}, [{ id: 3, age: 42 }].to_json] }
           stub.get("/users?age=42") { [200, {}, [{ id: 1, age: 42 }].to_json] }
           stub.get("/users?age=40") { [200, {}, [{ id: 1, age: 40 }].to_json] }
+          stub.get("/users?name=baz") { [200, {}, [].to_json] }
+          stub.post("/users") { [200, {}, { id: 5, name: "baz" }.to_json] }
         end
       end
 
@@ -264,6 +266,24 @@ describe Her::Model::ORM do
       expect(@users[1].id).to eq(2)
     end
 
+    it "handles finding by attributes" do
+      @user = User.find_by(age: 42)
+      expect(@user).to be_a(User)
+      expect(@user.id).to eq(1)
+    end
+
+    it "handles find or create by attributes" do
+      @user = User.find_or_create_by(name: "baz")
+      expect(@user).to be_a(User)
+      expect(@user.id).to eq(5)
+    end
+
+    it "handles find or initialize by attributes" do
+      @user = User.find_or_initialize_by(name: "baz")
+      expect(@user).to be_a(User)
+      expect(@user).to_not be_persisted
+    end
+
     it "handles finding with other parameters" do
       @users = User.where(age: 42, foo: "bar").all
       expect(@users).to be_kind_of(Array)
@@ -274,6 +294,14 @@ describe Her::Model::ORM do
       @users = User.scoped
       expect(@users.where(age: 42)).to be_all { |u| u.age == 42 }
       expect(@users.where(age: 40)).to be_all { |u| u.age == 40 }
+    end
+
+    it "handles reloading a resource" do
+      @user = User.find(1)
+      @user.age = "Oops"
+      @user.reload
+      expect(@user.age).to eq 42
+      expect(@user).to be_persisted
     end
   end
 
@@ -371,12 +399,15 @@ describe Her::Model::ORM do
         builder.use Her::Middleware::FirstLevelParseJSON
         builder.use Faraday::Request::UrlEncoded
         builder.adapter :test do |stub|
-          stub.get("/users/1") { [200, {}, { id: 1, fullname: "Tobias Fünke" }.to_json] }
-          stub.put("/users/1") { [200, {}, { id: 1, fullname: "Lindsay Fünke" }.to_json] }
+          stub.get("/users/1") { [200, {}, { id: 1, fullname: "Tobias Fünke", admin: false }.to_json] }
+          stub.put("/users/1") { [200, {}, { id: 1, fullname: "Lindsay Fünke", admin: true }.to_json] }
+          stub.get("/pages/1") { [200, {}, { id: 1, views: 1, unique_visitors: 4 }.to_json] }
+          stub.put("/pages/1") { [200, {}, { id: 1, views: 2, unique_visitors: 3 }.to_json] }
         end
       end
 
       spawn_model "Foo::User"
+      spawn_model "Foo::Page"
     end
 
     it "handle resource data update without saving it" do
@@ -396,6 +427,58 @@ describe Her::Model::ORM do
       @user.fullname = "Lindsay Fünke"
       @user.save
       expect(@user.fullname).to eq("Lindsay Fünke")
+    end
+
+    it "handles resource update through #toggle without saving it" do
+      @user = Foo::User.find(1)
+      expect(@user.admin).to be_falsey
+      expect(@user).to_not receive(:save)
+      @user.toggle(:admin)
+      expect(@user.admin).to be_truthy
+    end
+
+    it "handles resource update through #toggle!" do
+      @user = Foo::User.find(1)
+      expect(@user.admin).to be_falsey
+      expect(@user).to receive(:save).and_return(true)
+      @user.toggle!(:admin)
+      expect(@user.admin).to be_truthy
+    end
+
+    it "handles resource update through #increment without saving it" do
+      page = Foo::Page.find(1)
+      expect(page.views).to be 1
+      expect(page).to_not receive(:save)
+      page.increment(:views)
+      expect(page.views).to be 2
+      page.increment(:views, 2)
+      expect(page.views).to be 4
+    end
+
+    it "handles resource update through #increment!" do
+      page = Foo::Page.find(1)
+      expect(page.views).to be 1
+      expect(page).to receive(:save).and_return(true)
+      page.increment!(:views)
+      expect(page.views).to be 2
+    end
+
+    it "handles resource update through #decrement without saving it" do
+      page = Foo::Page.find(1)
+      expect(page.unique_visitors).to be 4
+      expect(page).to_not receive(:save)
+      page.decrement(:unique_visitors)
+      expect(page.unique_visitors).to be 3
+      page.decrement(:unique_visitors, 2)
+      expect(page.unique_visitors).to be 1
+    end
+
+    it "handles resource update through #decrement!" do
+      page = Foo::Page.find(1)
+      expect(page.unique_visitors).to be 4
+      expect(page).to receive(:save).and_return(true)
+      page.decrement!(:unique_visitors)
+      expect(page.unique_visitors).to be 3
     end
   end
 
@@ -528,6 +611,53 @@ describe Her::Model::ORM do
         user.save
         expect(user.fullname).to eq "Tobias Fünke"
       end
+    end
+  end
+
+  context "registering callbacks" do
+    before do
+      Her::API.setup url: "https://api.example.com" do |builder|
+        builder.use Her::Middleware::FirstLevelParseJSON
+        builder.use Faraday::Request::UrlEncoded
+        builder.adapter :test do |stub|
+          stub.get("/users/1") { [200, {}, { id: 1, fullname: "Tobias Fünke" }.to_json] }
+          stub.put("/users/1") { [200, {}, { id: 1, fullname: "Tobias Fünke" }.to_json] }
+          stub.post("/users")  { [200, {}, { id: 2, fullname: "Lindsay Fünke" }.to_json] }
+        end
+      end
+
+      spawn_model "User" do
+        before_save :before_save_callback
+        before_create :before_create_callback
+        before_update :before_update_callback
+        after_update :after_update_callback
+        after_create :after_create_callback
+        after_save :after_save_callback
+        def before_save_callback; end
+        def before_create_callback; end
+        def before_update_callback; end
+        def after_update_callback; end
+        def after_create_callback; end
+        def after_save_callback; end
+      end
+    end
+
+    it "runs create callbacks in the correct order" do
+      @user = User.new(fullname: "Tobias Fünke")
+      expect(@user).to receive(:before_save_callback).ordered
+      expect(@user).to receive(:before_create_callback).ordered
+      expect(@user).to receive(:after_create_callback).ordered
+      expect(@user).to receive(:after_save_callback).ordered
+      @user.save
+    end
+
+    it "runs update callbacks in the correct order" do
+      @user = User.find(1)
+      expect(@user).to receive(:before_save_callback).ordered
+      expect(@user).to receive(:before_update_callback).ordered
+      expect(@user).to receive(:after_update_callback).ordered
+      expect(@user).to receive(:after_save_callback).ordered
+      @user.save
     end
   end
 end

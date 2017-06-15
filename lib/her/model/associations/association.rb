@@ -49,6 +49,7 @@ module Her
 
           return @cached_result unless @params.any? || @cached_result.nil?
           return @parent.attributes[@name] unless @params.any? || @parent.attributes[@name].blank?
+          return @opts[:default].try(:dup) if @parent.new?
 
           path = build_association_path lambda { "#{@parent.request_path(@params)}#{@opts[:path]}" }
           @klass.get(path, @params).tap do |result|
@@ -63,6 +64,13 @@ module Her
           rescue Her::Errors::PathError
             return nil
           end
+        end
+
+        # @private
+        def reset
+          @params = {}
+          @cached_result = nil
+          @parent.attributes.delete(@name)
         end
 
         # Add query parameters to the HTTP request performed to fetch the data
@@ -95,6 +103,29 @@ module Her
           return nil if id.blank?
           path = build_association_path lambda { "#{@parent.request_path(@params)}#{@opts[:path]}/#{id}" }
           @klass.get_resource(path, @params)
+        end
+
+        # Refetches the association and puts the proxy back in its initial state,
+        # which is unloaded. Cached associations are cleared.
+        #
+        # @example
+        #   class User
+        #     include Her::Model
+        #     has_many :comments
+        #   end
+        #
+        #   class Comment
+        #     include Her::Model
+        #   end
+        #
+        #   user = User.find(1)
+        #   user.comments = [#<Comment(comments/2) id=2 body="Hello!">]
+        #   user.comments.first.id = "Oops"
+        #   user.comments.reload # => [#<Comment(comments/2) id=2 body="Hello!">]
+        #   # Fetched again via GET "/users/1/comments"
+        def reload
+          reset
+          fetch
         end
 
       end

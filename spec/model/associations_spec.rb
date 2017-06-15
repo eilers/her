@@ -180,6 +180,7 @@ describe Her::Model::Associations do
     let(:user_with_included_data_after_save_existing) { Foo::User.save_existing(5, name: "Clancy Brown") }
     let(:user_with_included_data_after_destroy) { Foo::User.new(id: 5).destroy }
     let(:comment_without_included_parent_data) { Foo::Comment.new(id: 7, user_id: 1) }
+    let(:new_user) { Foo::User.new }
 
     it "maps an array of included data through has_many" do
       expect(@user_with_included_data.comments.first).to be_a(Foo::Comment)
@@ -204,6 +205,12 @@ describe Her::Model::Associations do
       expect(@user_with_included_data.posts.first.admin.object_id).to eq(@user_with_included_data.object_id)
     end
 
+    it "doesn't attempt to fetch association data for a new resource" do
+      expect(new_user.comments).to eq([])
+      expect(new_user.role).to be_nil
+      expect(new_user.organization).to be_nil
+    end
+
     it "fetches data that was not included through has_many" do
       expect(@user_without_included_data.comments.first).to be_a(Foo::Comment)
       expect(@user_without_included_data.comments.length).to eq(2)
@@ -221,6 +228,10 @@ describe Her::Model::Associations do
 
     it "fetches data that was cached through has_many if called with parameters" do
       expect(@user_without_included_data.comments.first.object_id).not_to eq(@user_without_included_data.comments.where(foo_id: 1).first.object_id)
+    end
+
+    it "fetches data again after being reloaded" do
+      expect { @user_without_included_data.comments.reload }.to change { @user_without_included_data.comments.first.object_id }
     end
 
     it "maps an array of included data through has_one" do
